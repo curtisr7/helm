@@ -358,13 +358,38 @@ type UpdateOptions struct {
 func (c *Client) UpdateWithOptions(namespace string, originalReader, targetReader io.Reader, opts UpdateOptions) error {
 	original, err := c.BuildUnstructured(namespace, originalReader)
 	if err != nil {
-		return fmt.Errorf("failed decoding reader into objects: %s", err)
+		fmt.Printf("failed decoding reader into objects: %s\n%v", err, original)
+		err = nil
+		// On error BuildUnstructured returns "something"
+		original = nil
 	}
 
-	c.Log("building resources from updated manifest")
+	fmt.Println("building resources from target manifest")
 	target, err := c.BuildUnstructured(namespace, targetReader)
 	if err != nil {
-		return fmt.Errorf("failed decoding reader into objects: %s", err)
+		return fmt.Errorf("failed decoding reader(target) into objects: %s", err)
+	}
+	if original == nil {
+		fmt.Printf("source not found, trying to replace update")
+		return target.Visit(func(info *resource.Info, err error) error {
+			helper := resource.NewHelper(info.Client, info.Mapping)
+			fmt.Printf("replacing %v", info.Name)
+			if _, err := helper.Replace(namespace, info.Name, true, info.Object); err != nil {
+				// We got an error trying to put this resource. See if we can get an existing
+				// and then patch?
+				existing, err := helper.Get(namespace, info.Name, true)
+				if err != nil {
+					fmt.Printf("get/replace err %v", err)
+					return err
+				}
+				if err := updateResource(c, info, existing, opts.Force, opts.Recreate); err != nil {
+					fmt.Printf("get/replace/updateResource err %v", err)
+					return err
+				}
+				return nil
+			}
+			return nil
+		})
 	}
 
 	newlyCreatedResources := []*resource.Info{}
